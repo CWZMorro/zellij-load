@@ -63,7 +63,11 @@ impl ZellijPlugin for State {
             }
             Event::BeforeClose => {
                 eprintln!("Before close event received");
-                let _ = fs::remove_file("/tmp/system-monitor-lock");
+                if let Err(err) = fs::remove_file("/tmp/system-monitor-lock") {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        eprintln!("Failed to remove lock file: {}", err);
+                    }
+                }
             }
             _ => {}
         }
