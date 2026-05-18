@@ -64,7 +64,7 @@ impl ZellijPlugin for State {
             }
             Event::BeforeClose => {
                 eprintln!("Before close event received");
-                fs::remove_file("/tmp/system-monitor-lock").unwrap();
+                let _ = fs::remove_file("/tmp/system-monitor-lock");
             }
             _ => {}
         }
@@ -95,47 +95,60 @@ impl ZellijPlugin for State {
     }
 
     fn render(&mut self, _rows: usize, cols: usize) {
-        let text = format!(
-            "CPU: {} | Mem Used: {} | Mem Total: {} | {}",
-            format!("{:.2}%", self.stats.cpu_usage as f64).magenta(),
-            format!(
-                "{:.2} GB",
-                self.stats.mem_used as f64 / 1024.0 / 1024.0 / 1024.0
-            )
-            .cyan(),
-            format!(
-                "{:.2} GB",
-                self.stats.mem_total as f64 / 1024.0 / 1024.0 / 1024.0
-            )
-            .cyan(),
-            match self.stats.gpu_info.as_ref() {
-                Some(gpu) => {
-                    let gpu_load = format!("{:.2}%", gpu.gpu_utilization as f64).blue();
-                    let gpu_mem_used =
-                        format!("{:.2}", gpu.memory_used as f64 / 1024.0 / 1024.0 / 1024.0).blue();
-                    let gpu_mem_total = format!(
-                        "{:.2} GB",
-                        gpu.memory_total as f64 / 1024.0 / 1024.0 / 1024.0
-                    )
-                    .blue();
-                    format!(
-                        "GPU Load: {} | GPU Mem Used: {} / {}",
-                        gpu_load, gpu_mem_used, gpu_mem_total
-                    )
-                }
-                None => "N/A | N/A | N/A".red().to_string(),
+        if cols == 0 {
+            return;
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        let cpu_value = format!("{:.2}%", self.stats.cpu_usage as f64);
+        let cpu_segment = format!("CPU: {}", cpu_value.magenta());
+        segments.push(cpu_segment);
+
+        let mem_used_gb = self.stats.mem_used as f64 / 1024.0 / 1024.0 / 1024.0;
+        let mem_total_gb = self.stats.mem_total as f64 / 1024.0 / 1024.0 / 1024.0;
+        let mem_value = format!("{:.2}GB/{:.2}GB", mem_used_gb, mem_total_gb);
+        let mem_segment = format!("MEM: {}", mem_value.blue());
+        segments.push(mem_segment);
+
+        if let Some(gpu) = &self.stats.gpu_info {
+            let gpu_value = format!("{:.2}%", gpu.gpu_utilization as f64);
+            let gpu_segment = format!("GPU: {}", gpu_value.green());
+            segments.push(gpu_segment);
+
+            let vram_used_gb = gpu.memory_used as f64 / 1024.0 / 1024.0 / 1024.0;
+            let vram_total_gb = gpu.memory_total as f64 / 1024.0 / 1024.0 / 1024.0;
+            let vram_value = format!("{:.2}GB/{:.2}GB", vram_used_gb, vram_total_gb);
+            let vram_segment = format!("VRAM: {}", vram_value.yellow());
+            segments.push(vram_segment);
+        }
+
+        let mut fitted: Vec<String> = Vec::new();
+        let mut used_cols = 0;
+
+        for segment in segments {
+            let segment_visible = strip_ansi_codes(&segment).chars().count();
+            let space_needed = if fitted.is_empty() {
+                segment_visible
+            } else {
+                3 + segment_visible // 3 = length of separator " | "
+            };
+
+            if used_cols + space_needed <= cols {
+                used_cols += space_needed;
+                fitted.push(segment);
+            } else {
+                break;
             }
-        );
+        }
 
-        // Calculate adjustment for ANSI codes
-        let visible_chars = strip_ansi_codes(&text).chars().count();
-        // The amount of extra characters due to ANSI codes
-        let adjustment = text.len() - visible_chars;
+        if fitted.is_empty() {
+            return;
+        }
 
-        // Position from right edge with some margin
-        let right_margin = 5;
-        let target_pos = cols.saturating_sub(right_margin);
-
-        print!("{:>width$}", text, width = target_pos + adjustment);
+        let text = fitted.join(" | ");
+        let visible_length = strip_ansi_codes(&text).chars().count();
+        let padding = cols.saturating_sub(visible_length);
+        print!("{}{}", " ".repeat(padding), text);
     }
 }
