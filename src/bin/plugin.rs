@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 
 use colored::Colorize;
-use serde_json;
 
 use zellij_load::system_info::SystemMessage;
 use zellij_tile::prelude::*;
@@ -74,22 +73,19 @@ impl ZellijPlugin for State {
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
         let mut should_render = false;
-        match pipe_message.source {
-            PipeSource::Cli(_input_pipe_id) => {
-                if let Some(payload) = pipe_message.payload {
-                    match serde_json::from_str(&payload) as Result<SystemMessage, _> {
-                        // Deserialize the JSON message
-                        Ok(system_msg) => {
-                            self.stats = system_msg;
-                            should_render = true;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to parse message: {}", e);
-                        }
-                    }
+        if let PipeSource::Cli(_input_pipe_id) = pipe_message.source
+            && let Some(payload) = pipe_message.payload
+        {
+            match serde_json::from_str(&payload) as Result<SystemMessage, _> {
+                // Deserialize the JSON message
+                Ok(system_msg) => {
+                    self.stats = system_msg;
+                    should_render = true;
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse message: {}", e);
                 }
             }
-            _ => {}
         }
         should_render
     }
