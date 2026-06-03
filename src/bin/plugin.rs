@@ -16,13 +16,23 @@ struct State {
 register_plugin!(State);
 
 fn strip_ansi_codes(s: &str) -> String {
-    // Remove ANSI escape sequences
     let re = regex::Regex::new(r"\x1b\[[0-9;]*[mK]").unwrap();
     re.replace_all(s, "").to_string()
 }
 
+fn usage_color(text: &str, pct: f64, warn: f64, crit: f64) -> colored::ColoredString {
+    if pct >= crit {
+        text.bright_red()
+    } else if pct >= warn {
+        text.yellow()
+    } else {
+        text.bright_green()
+    }
+}
+
 impl ZellijPlugin for State {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
+        colored::control::set_override(true);
         let id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -107,26 +117,46 @@ impl ZellijPlugin for State {
 
         let mut segments: Vec<String> = Vec::new();
 
-        let cpu_value = format!("{:.2}%", self.stats.cpu_usage as f64);
-        let cpu_segment = format!("CPU: {}", cpu_value.magenta());
-        segments.push(cpu_segment);
+        let cpu_pct = self.stats.cpu_usage as f64;
+        segments.push(format!(
+            "{} {}",
+            "CPU:".bright_black().bold(),
+            usage_color(&format!("{:.1}%", cpu_pct), cpu_pct, 50.0, 80.0)
+        ));
 
         let mem_used_gb = self.stats.mem_used as f64 / 1024.0 / 1024.0 / 1024.0;
         let mem_total_gb = self.stats.mem_total as f64 / 1024.0 / 1024.0 / 1024.0;
-        let mem_value = format!("{:.2}GB/{:.2}GB", mem_used_gb, mem_total_gb);
-        let mem_segment = format!("MEM: {}", mem_value.blue());
-        segments.push(mem_segment);
+        let mem_pct = if self.stats.mem_total > 0 {
+            self.stats.mem_used as f64 / self.stats.mem_total as f64 * 100.0
+        } else {
+            0.0
+        };
+        segments.push(format!(
+            "{} {}",
+            "MEM:".bright_black().bold(),
+            usage_color(&format!("{:.2}/{:.2}GB", mem_used_gb, mem_total_gb), mem_pct, 60.0, 80.0)
+        ));
 
         if let Some(gpu) = &self.stats.gpu_info {
-            let gpu_value = format!("{:.2}%", gpu.gpu_utilization as f64);
-            let gpu_segment = format!("GPU: {}", gpu_value.green());
-            segments.push(gpu_segment);
+            let gpu_pct = gpu.gpu_utilization as f64;
+            segments.push(format!(
+                "{} {}",
+                "GPU:".bright_black().bold(),
+                usage_color(&format!("{:.1}%", gpu_pct), gpu_pct, 50.0, 80.0)
+            ));
 
             let vram_used_gb = gpu.memory_used as f64 / 1024.0 / 1024.0 / 1024.0;
             let vram_total_gb = gpu.memory_total as f64 / 1024.0 / 1024.0 / 1024.0;
-            let vram_value = format!("{:.2}GB/{:.2}GB", vram_used_gb, vram_total_gb);
-            let vram_segment = format!("VRAM: {}", vram_value.yellow());
-            segments.push(vram_segment);
+            let vram_pct = if gpu.memory_total > 0 {
+                gpu.memory_used as f64 / gpu.memory_total as f64 * 100.0
+            } else {
+                0.0
+            };
+            segments.push(format!(
+                "{} {}",
+                "VRAM:".bright_black().bold(),
+                usage_color(&format!("{:.2}/{:.2}GB", vram_used_gb, vram_total_gb), vram_pct, 60.0, 80.0)
+            ));
         }
 
         let mut fitted: Vec<String> = Vec::new();
@@ -152,7 +182,8 @@ impl ZellijPlugin for State {
             return;
         }
 
-        let text = fitted.join(" | ");
+        let sep = format!(" {} ", "|".bright_black());
+        let text = fitted.join(&sep);
         let visible_length = strip_ansi_codes(&text).chars().count();
         let padding = cols.saturating_sub(visible_length);
         print!("{}{}", " ".repeat(padding), text);
