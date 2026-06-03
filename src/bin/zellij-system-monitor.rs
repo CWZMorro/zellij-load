@@ -71,17 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
             let xdg_runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
             let mut patterns: Vec<String> = vec![
-                format!("{}/zellij-*/system-monitor-lock", base_tmp),
-                format!("{}/system-monitor-lock", base_tmp),
+                format!("{}/system-monitor-lock-*", base_tmp),
+                format!("{}/zellij-*/system-monitor-lock-*", base_tmp),
             ];
             if !xdg_runtime.is_empty() {
-                patterns.push(format!("{}/zellij*/system-monitor-lock", xdg_runtime));
-                patterns.push(format!("{}/system-monitor-lock", xdg_runtime));
+                patterns.push(format!("{}/system-monitor-lock-*", xdg_runtime));
             }
-            // Also cover the hard-coded /tmp fallback in case TMPDIR differs
             if base_tmp != "/tmp" {
-                patterns.push("/tmp/zellij-*/system-monitor-lock".to_string());
-                patterns.push("/tmp/system-monitor-lock".to_string());
+                patterns.push("/tmp/system-monitor-lock-*".to_string());
             }
             let lock_exists = patterns.iter().any(|pattern| {
                 match glob(pattern) {

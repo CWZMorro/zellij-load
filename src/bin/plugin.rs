@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use colored::Colorize;
 
@@ -9,6 +10,7 @@ use zellij_tile::prelude::*;
 #[derive(Default)]
 struct State {
     stats: SystemMessage,
+    lock_path: String,
 }
 
 register_plugin!(State);
@@ -21,7 +23,12 @@ fn strip_ansi_codes(s: &str) -> String {
 
 impl ZellijPlugin for State {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
-        // Request the necessary permissions
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        self.lock_path = format!("/tmp/system-monitor-lock-{}", id);
+
         request_permission(&[PermissionType::RunCommands, PermissionType::OpenFiles]);
 
         subscribe(&[
@@ -38,8 +45,7 @@ impl ZellijPlugin for State {
             Event::PermissionRequestResult(status) => match status {
                 PermissionStatus::Granted => {
                     eprintln!("Permission granted");
-                    let _ = File::create("/tmp/system-monitor-lock").unwrap();
-                    // Get current directory and run command there
+                    let _ = File::create(&self.lock_path);
                     let current_dir = std::path::PathBuf::from(".");
 
                     // Pass plugin PID to monitor using environment variable
@@ -63,7 +69,7 @@ impl ZellijPlugin for State {
             }
             Event::BeforeClose => {
                 eprintln!("Before close event received");
-                if let Err(err) = fs::remove_file("/tmp/system-monitor-lock") {
+                if let Err(err) = fs::remove_file(&self.lock_path) {
                     if err.kind() != std::io::ErrorKind::NotFound {
                         eprintln!("Failed to remove lock file: {}", err);
                     }
