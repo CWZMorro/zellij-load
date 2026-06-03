@@ -11,7 +11,7 @@ codegen-units = 1
 
 [dependencies]
 # Plugin dependencies
-zellij-tile = {version = "0.43.1", optional = true}
+zellij-tile = {version = "0.44.3", optional = true}
 colored = {version = "3.0.0", optional = true}
 regex = {version = "1.9.4", optional = true}
 
@@ -22,7 +22,7 @@ serde_json = { version = "1.0", features = ["std"] }
 # Daemon dependencies
 clap = { version = "4.0", features = ["derive"], optional = true }
 sysinfo = { version = "0.37.2", optional = true }
-tokio = { version = "1.35", features = ["sync","macros","io-util","rt","time", "rt-multi-thread","signal"], optional = true }
+tokio = { version = "1.35", features = ["sync","macros","io-util","rt","time","process","rt-multi-thread","signal"], optional = true }
 single-instance = {version = "0.3.3", optional = true}
 gfxinfo = {version = "0.1.2", optional = true}
 glob = {version = "0.3", optional = true}

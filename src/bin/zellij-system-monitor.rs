@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -6,8 +5,9 @@ use gfxinfo::active_gpu;
 use glob::glob;
 use single_instance::SingleInstance;
 
+use tokio::process::Command;
 use tokio::sync::mpsc as async_mpsc;
-use tokio::time::{Duration, MissedTickBehavior, interval};
+use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
 
 use zellij_load::system_info::{CpuUsage, GPU, GpuUsage, MemUsage, SystemMessage};
 
@@ -64,21 +64,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             interval.tick().await;
 
-            let pattern = "/tmp/zellij-*/system-monitor-lock";
-            let lock_exists = match glob(pattern) {
-                Ok(paths) => paths.count() > 0,
-                Err(err) => {
-                    eprintln!("Error checking lock file pattern: {}", err);
-                    false
+            // The Zellij WASM plugin creates the lock at "/tmp/system-monitor-lock"
+            // inside its sandbox, which maps to different host paths depending on
+            // the system (e.g. /tmp/zellij-<uid>/ or $XDG_RUNTIME_DIR/zellij*/,
+            // or just /tmp/ on some setups). Check all common locations.
+            let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+            let xdg_runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
+            let mut patterns: Vec<String> = vec![
+                format!("{}/zellij-*/system-monitor-lock", base_tmp),
+                format!("{}/system-monitor-lock", base_tmp),
+            ];
+            if !xdg_runtime.is_empty() {
+                patterns.push(format!("{}/zellij*/system-monitor-lock", xdg_runtime));
+                patterns.push(format!("{}/system-monitor-lock", xdg_runtime));
+            }
+            // Also cover the hard-coded /tmp fallback in case TMPDIR differs
+            if base_tmp != "/tmp" {
+                patterns.push("/tmp/zellij-*/system-monitor-lock".to_string());
+                patterns.push("/tmp/system-monitor-lock".to_string());
+            }
+            let lock_exists = patterns.iter().any(|pattern| {
+                match glob(pattern) {
+                    Ok(mut paths) => paths.next().is_some(),
+                    Err(err) => {
+                        eprintln!("Error checking lock file pattern {}: {}", pattern, err);
+                        false
+                    }
                 }
-            };
+            });
 
             if !lock_exists {
                 std::process::exit(0);
             }
 
-            // Update CPU and memory usage
-            cpu_usage.update(&mut sys);
+            // Update CPU (two samples separated by a sleep for accurate measurement)
+            cpu_usage.sample(&mut sys);
+            sleep(Duration::from_millis(400)).await;
+            cpu_usage.read(&mut sys);
             mem_usage.update(&mut sys);
 
             // Update GPU usage from the channel
@@ -94,17 +116,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mem_used = mem_usage.total - mem_usage.idle;
             let mem_total = mem_usage.total;
 
-            let gpu_info = if let (Some(name), Some(mem_used), Some(mem_total), Some(gpu_util)) = (
-                Some(&gpu_usage.name),
-                Some(gpu_usage.memory_used),
-                Some(gpu_usage.memory_total),
-                Some(gpu_usage.gpu_utilization),
-            ) {
+            let gpu_info = if !gpu_usage.name.is_empty() && gpu_usage.memory_total > 0 {
                 Some(GPU {
-                    name: name.to_string(),
-                    memory_used: mem_used,
-                    memory_total: mem_total,
-                    gpu_utilization: gpu_util,
+                    name: gpu_usage.name.clone(),
+                    memory_used: gpu_usage.memory_used,
+                    memory_total: gpu_usage.memory_total,
+                    gpu_utilization: gpu_usage.gpu_utilization,
                 })
             } else {
                 None
@@ -127,16 +144,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Send system updates to this client
-    loop {
-        while let Some(msg) = rx.recv().await {
-            let _output = Command::new("zellij")
-                .arg("pipe")
-                .arg("--name")
-                .arg("zellij-system-monitor")
-                .arg("--")
-                .arg(msg)
-                .output()
-                .expect("failed to execute process");
-        }
+    while let Some(msg) = rx.recv().await {
+        let _ = Command::new("zellij")
+            .arg("pipe")
+            .arg("--name")
+            .arg("zellij-system-monitor")
+            .arg("--")
+            .arg(msg)
+            .output()
+            .await;
     }
+
+    Ok(())
 }
