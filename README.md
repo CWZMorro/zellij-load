@@ -10,13 +10,24 @@ Zellij Load is a two-component system monitoring solution for Zellij:
 - A native daemon that collects system information
 - A WebAssembly plugin that renders the data in the Zellij status bar
 
-The system is designed to be efficient, with minimal resource usage, and provides a clean, colored display of system metrics.
+The system is designed to be efficient, with minimal resource usage, and provides a clean, color-coded display of system metrics.
+
+## Features
+
+- Real-time CPU usage monitoring
+- Memory usage tracking (used/total in GB)
+- GPU utilization and VRAM monitoring (optional, auto-detected)
+- Color-coded values based on load thresholds:
+  - CPU/GPU: green < 50% → yellow < 80% → red ≥ 80%
+  - MEM/VRAM: green < 60% → yellow < 80% → red ≥ 80%
+- Gracefully fits available terminal width — metrics are dropped right-to-left when space is tight
+- Single-instance daemon with automatic lifecycle management
 
 ## Building
 
 This project uses [Just](https://github.com/casey/just) for task automation. The `justfile` provides several build targets:
 
-```justfile
+```bash
 # Build all components (daemon and WASM plugin)
 just build-all
 
@@ -38,7 +49,7 @@ just uninstall
 - Rust toolchain (latest stable)
 - Just (task runner)
 - Zellij terminal multiplexer
-- For GPU monitoring: GPU drivers with support for querying GPU statistics
+- For GPU monitoring: GPU drivers with support for querying GPU statistics (currently tested with NVIDIA GPUs)
 
 ## Installation and Setup
 
@@ -52,7 +63,7 @@ just uninstall
    just install
    ```
 
-3. Add the plugin to your Zellij configuration:
+3. Add the plugin to your Zellij configuration. A ready-to-use example layout is provided in `default.kdl`:
    ```kdl
    layout {
        pane size=1 borderless=true {
@@ -71,23 +82,21 @@ just uninstall
    ```
 
    Replace `/path/to/zellij-load` with the actual path to the repository.
- 
-**Note: You do NOT need to use this excact layout BUT you do need to follow the vertical split pane for the bottom or top pane so the plugin doesnt need its own line**
+
+**Note: The exact layout is up to you, but the plugin must share a horizontal pane with the status bar (vertical split) so it doesn't occupy its own full line.**
 
 ## Development
 
 ### Running During Development
 
-For development, you can use the provided just commands:
-
 ```bash
 # Run the daemon in debug mode
 just run-daemon
 
-# Run the plugin in debug mode
+# Build and hot-reload the plugin (debug build)
 just run-debug
 
-# Build and run the plugin
+# Build release and hot-reload the plugin
 just run
 ```
 
@@ -97,17 +106,18 @@ just run
 zellij-load/
 ├── src/
 │   ├── bin/
-│   │   ├── plugin.rs              # WASM plugin entry point
-│   │   └── zellij-system-monitor.rs # Native daemon entry point
+│   │   ├── plugin.rs                  # WASM plugin entry point
+│   │   └── zellij-system-monitor.rs   # Native daemon entry point
 │   ├── system_info/
-│   │   ├── cpu.rs                 # CPU usage collection
-│   │   ├── gpu.rs                 # GPU usage collection
-│   │   ├── mem.rs                 # Memory usage collection
-│   │   └── info.rs                # Data structures
-│   └── lib.rs                     # Library entry point
-├── Cargo.toml                     # Rust project configuration
-├── default.kdl                    # Example Zellij layout
-└── justfile                       # Build tasks
+│   │   ├── cpu.rs                     # CPU usage collection
+│   │   ├── gpu.rs                     # GPU usage collection
+│   │   ├── mem.rs                     # Memory usage collection
+│   │   └── info.rs                    # Shared data structures (SystemMessage, GPU)
+│   └── lib.rs                         # Library entry point (render helpers, UsageLevel)
+├── .github/workflows/ci.yml           # CI pipeline
+├── Cargo.toml                         # Rust project configuration
+├── default.kdl                        # Example Zellij layout
+└── justfile                           # Build tasks
 ```
 
 ### Architecture
@@ -117,16 +127,19 @@ The system consists of two main components that communicate via Zellij's pipe me
 #### Daemon (Native Component)
 
 The native daemon (`zellij-system-monitor`) is responsible for:
-- Collecting system metrics (CPU, memory, GPU)
-- Processing and formatting the data
-- Sending updates to the plugin through Zellij pipes
+- Collecting system metrics (CPU, memory, GPU) every ~2 seconds
+- Serializing the data as JSON and piping it into the Zellij session
+- Automatically exiting when the plugin's lock file is removed (i.e., when the plugin closes)
+- Enforcing single-instance behavior via a system lock
 
 #### Plugin (WebAssembly Component)
 
 The plugin (`zellij-load-plugin.wasm`) is responsible for:
-- Receiving system data from the daemon
-- Rendering the information in the Zellij status bar
-- Managing permissions and lifecycle
+- Requesting `RunCommands` and `OpenFiles` permissions on load
+- Spawning the daemon process once permissions are granted
+- Receiving JSON metric payloads via Zellij pipes
+- Rendering color-coded metrics to the status bar
+- Removing the lock file on `BeforeClose` to signal the daemon to stop
 
 ```mermaid
 graph TB
@@ -135,14 +148,14 @@ graph TB
         Plugin[Plugin WebAssembly]
         Status[Status Bar]
     end
-    
+
     subgraph "Native Daemon"
         Daemon[zellij-system-monitor]
         CPU[CPU Monitor]
         MEM[Memory Monitor]
         GPU[GPU Monitor]
     end
-    
+
     Zellij --> Plugin
     Daemon --> |pipe| Plugin
     CPU --> Daemon
@@ -153,10 +166,11 @@ graph TB
 
 ### Data Flow
 
-1. The daemon periodically collects system metrics
-2. The daemon serializes the data as JSON and sends it through a Zellij pipe
-3. The plugin receives the data, deserializes it, and renders the information
-4. The plugin displays CPU usage, memory usage, and GPU information (if available)
+1. The plugin requests permissions and spawns the daemon
+2. The daemon polls CPU, memory, and GPU every ~2 seconds
+3. Metrics are serialized as JSON and sent via `zellij pipe`
+4. The plugin deserializes and renders each update to the status bar
+5. When the plugin closes, it removes a lock file — the daemon detects this and exits
 
 ```mermaid
 sequenceDiagram
@@ -164,20 +178,24 @@ sequenceDiagram
     participant Zellij
     participant Daemon
     participant System
-    
+
     Plugin->>Zellij: Request permission to run commands
     Zellij->>Plugin: Permission granted
     Plugin->>Daemon: Start via command execution
-    Daemon->>System: Collect system metrics
-    System->>Daemon: Return metrics
-    Daemon->>Zellij: Send metrics via pipe
-    Zellij->>Plugin: Forward metrics
-    Plugin->>Plugin: Render metrics to status bar
+    loop Every ~2 seconds
+        Daemon->>System: Collect CPU / memory / GPU metrics
+        System->>Daemon: Return metrics
+        Daemon->>Zellij: Send JSON via pipe
+        Zellij->>Plugin: Forward pipe message
+        Plugin->>Plugin: Render color-coded metrics to status bar
+    end
+    Plugin->>Plugin: BeforeClose — remove lock file
+    Daemon->>Daemon: Lock file gone — exit
 ```
 
 ## Contributing
 
-Contributions Welcomed! Please follow these guidelines:
+Contributions welcome! Please follow these guidelines:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -196,6 +214,14 @@ Contributions Welcomed! Please follow these guidelines:
 
 ### Testing
 
+```bash
+# Run native tests
+just test
+
+# Run plugin tests (targets wasm32-wasip1)
+just test-plugin
+```
+
 Before submitting a PR, please ensure:
 - All existing tests pass
 - New functionality includes appropriate tests
@@ -207,14 +233,15 @@ Before submitting a PR, please ensure:
 ### Common Issues
 
 1. **Permission Denied**: Ensure the plugin has permissions to run commands and open files
-2. **GPU Not Detected**: Verify GPU drivers are properly installed and support querying statistics (Currently only tested with NVIDIA GPUs)
+2. **GPU Not Detected**: Verify GPU drivers are properly installed and support querying statistics (currently only tested with NVIDIA GPUs)
 3. **Plugin Not Loading**: Check the path in your Zellij configuration is correct
+4. **Metrics Frozen**: If the display stops updating, the daemon may have exited — reloading the plugin will respawn it
 
 ### Debugging
 
-- Enable debug output in the plugin by checking the output of `zellij setup --dump-config`
-- Check `/tmp/zellij-<UID>/system-monitor-lock` to verify the daemon is running
-- Monitor system logs for any daemon error messages
+- Check for a lock file at `/tmp/system-monitor-lock-*` or `$XDG_RUNTIME_DIR/system-monitor-lock-*` to verify the daemon is running
+- Monitor system logs for daemon error messages
+- Use `zellij setup --dump-config` to inspect plugin configuration
 
 ## License
 
