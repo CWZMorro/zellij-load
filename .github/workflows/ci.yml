@@ -50,4 +50,4 @@ jobs:
     
     - name: Run tests
       run: |
-        cargo nextest run --features native --release
+        cargo nextest run --features native
