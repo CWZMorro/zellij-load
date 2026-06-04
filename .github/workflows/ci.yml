@@ -44,7 +44,8 @@ jobs:
     
     - name: Build project
       run: |
-        cargo build --features native,plugin --verbose
+        cargo build --target wasm32-wasip1 --release --bin zellij-load-plugin --features plugin
+        cargo build --release --bin zellij_system_monitor --features native
     
     - name: Run native tests
       run: |
