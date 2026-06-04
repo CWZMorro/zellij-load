@@ -33,3 +33,7 @@ install:
 [group("install")]
 uninstall:
     cargo uninstall --bin zellij_system_monitor
+
+[group("test")]
+test:
+    cargo nextest run --features native --no-tests=pass

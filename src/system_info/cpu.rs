@@ -15,3 +15,21 @@ impl CpuUsage {
         self.total = sys.global_cpu_usage();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_read_produces_valid_percentage() {
+        let mut sys = System::new_all();
+        let mut usage = CpuUsage::default();
+        usage.sample(&mut sys);
+        usage.read(&mut sys);
+        assert!(
+            (0.0..=100.0).contains(&usage.total),
+            "cpu usage {} is out of range",
+            usage.total
+        );
+    }
+}

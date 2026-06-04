@@ -13,3 +13,17 @@ impl MemUsage {
         self.idle = sys.available_memory();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mem_update_produces_valid_values() {
+        let mut sys = System::new_all();
+        let mut usage = MemUsage::default();
+        usage.update(&mut sys);
+        assert!(usage.total > 0, "total memory should be nonzero");
+        assert!(usage.idle <= usage.total, "idle cannot exceed total");
+    }
+}
