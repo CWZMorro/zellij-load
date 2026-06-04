@@ -54,4 +54,4 @@ jobs:
     
     - name: Run plugin tests
       run: |
-        cargo nextest run --features plugin --target wasm32-wasip1 --verbose
+        cargo nextest run --features plugin
